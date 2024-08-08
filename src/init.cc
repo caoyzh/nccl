@@ -76,12 +76,12 @@ static ncclResult_t initResult = ncclSuccess;
 static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
 
 static void initOnceFunc() {
-  initEnv();
-  initGdrCopy();
+  initEnv(); // 初始化环境设置
+  initGdrCopy(); // 初始化 GPU Direct RDMA (GDR)
   // Always initialize bootstrap network
-  NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);
+  NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit); // bootstrap网络的初始化
 
-  initNvtxRegisteredEnums();
+  initNvtxRegisteredEnums(); // 初始化与 NVTX 相关的枚举类型，以便在性能分析工具中使用。 
 exit:;
 }
 
@@ -99,9 +99,11 @@ ncclResult_t ncclGetVersion(int* version) {
 
 NCCL_API(ncclResult_t, ncclGetUniqueId, ncclUniqueId* out);
 ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
-  NCCLCHECK(ncclInit());
-  NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));
-  ncclResult_t res = bootstrapGetUniqueId((struct ncclBootstrapHandle*)out);
+  NCCLCHECK(ncclInit()); // 确保NCCL库已经初始化。如果尚未初始化，则进行初始化。  
+  NCCLCHECK(PtrCheck(out, "GetUniqueId", "out")); // 检查传入的out指针是否为非空
+
+  // 2、调用bootstrapGetUniqueId函数来获取一个唯一的ID，并将这个ID存储在传入的out指针所指向的内存位置。 
+  ncclResult_t res = bootstrapGetUniqueId((struct ncclBootstrapHandle*)out); 
   TRACE_CALL("ncclGetUniqueId(0x%llx)", (unsigned long long)hashUniqueId(*out));
   return res;
 }
@@ -1353,24 +1355,25 @@ fail:
 }
 
 static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
+  // 入参类型转换成ncclCommInitRankAsyncJob
   struct ncclCommInitRankAsyncJob* job = (struct ncclCommInitRankAsyncJob*)job_;
-  ncclComm_t comm = job->comm;
+  ncclComm_t comm = job->comm; // 获取作业中指定的通信器
   ncclResult_t res = ncclSuccess;
   int archMajor, archMinor;
-  size_t maxLocalSizeBytes = 0;
-  int cudaDev = job->cudaDev;
-  int* parentRanks = NULL;
-  int cudaArch;
+  size_t maxLocalSizeBytes = 0; // 初始化变量用于保存内核栈的最大大小（字节为单位）
+  int cudaDev = job->cudaDev;// 获取作业中指定的CUDA设备ID
+  int* parentRanks = NULL; // 初始化一个指向父通信器排名的指针（初始为NULL）
+  int cudaArch; // 用于保存CUDA设备的架构值（由主版本和次版本组成）  
   uint64_t timers[TIMERS_INIT_COUNT];
 
   timers[TIMER_INIT_TOTAL] = clockNano();
-  CUDACHECKGOTO(cudaSetDevice(cudaDev), res, fail);
-  CUDACHECKGOTO(cudaDeviceGetAttribute(&archMajor, cudaDevAttrComputeCapabilityMajor, cudaDev), res, fail);
-  CUDACHECKGOTO(cudaDeviceGetAttribute(&archMinor, cudaDevAttrComputeCapabilityMinor, cudaDev), res, fail);
-  cudaArch = 100*archMajor + 10*archMinor;
+  CUDACHECKGOTO(cudaSetDevice(cudaDev), res, fail);// 设置CUDA设备为指定的设备ID
+  CUDACHECKGOTO(cudaDeviceGetAttribute(&archMajor, cudaDevAttrComputeCapabilityMajor, cudaDev), res, fail); // 获取CUDA设备的主计算能力版本 
+  CUDACHECKGOTO(cudaDeviceGetAttribute(&archMinor, cudaDevAttrComputeCapabilityMinor, cudaDev), res, fail); // 获取CUDA设备的次计算能力版本
+  cudaArch = 100*archMajor + 10*archMinor; // 计算CUDA设备的架构值（例如，7.5对应750） 
 
   timers[TIMER_INIT_KERNELS] = clockNano();
-  NCCLCHECK(ncclInitKernelsForDevice(cudaArch, &maxLocalSizeBytes));
+  NCCLCHECK(ncclInitKernelsForDevice(cudaArch, &maxLocalSizeBytes)); // 为指定设备初始化NCCL内核
   // Set the maximum kernel stack size of all kernels to avoid
   // a CUDA memory reconfig on load (c.f. NVSHMEM issue)
   if (maxLocalSizeBytes > 0 && ncclParamSetStackSize() == 1) {
@@ -1624,56 +1627,59 @@ fail:
 static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank, int cudaDev, ncclConfig_t *config) {
   ncclResult_t res = ncclSuccess;
   ncclComm_t comm = NULL;
-  struct ncclCommInitRankAsyncJob *job = NULL;
-  const char* env = ncclGetEnv("NCCL_COMM_ID");
-  if (env && myrank == 0) {
+  struct ncclCommInitRankAsyncJob *job = NULL; // 初始化异步任务结构体指针为NUL
+  const char* env = ncclGetEnv("NCCL_COMM_ID"); // 获取环境变量NCCL_COMM_ID的值
+  if (env && myrank == 0) { // 如果环境变量存在且当前节点是第一个节点
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
-    NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&commId, true), res, fail);
+    NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&commId, true), res, fail); // 创建根节点
   }
 
-  NCCLCHECKGOTO(ncclInit(), res, fail);
+  NCCLCHECKGOTO(ncclInit(), res, fail); // 确保NCCL驱动已经初始化
   if (ncclDebugLevel > NCCL_LOG_WARN || (ncclDebugLevel != NCCL_LOG_NONE && myrank == 0)) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
-    pthread_once(&once, showVersion);
+    pthread_once(&once, showVersion); // 显示版本信息
   }
   // Make sure the CUDA runtime is initialized.
-  CUDACHECKGOTO(cudaFree(NULL), res, fail);
-
-  NCCLCHECKGOTO(PtrCheck(newcomm, "CommInitRank", "newcomm"), res, fail);
-  NCCLCHECKGOTO(PtrCheck(config, "CommInitRank", "config"), res, fail);
+  CUDACHECKGOTO(cudaFree(NULL), res, fail); // 确保CUDA运行时已经初始化
+  // 检查参数/指针是否为空，是否在有效范围内
+  NCCLCHECKGOTO(PtrCheck(newcomm, "CommInitRank", "newcomm"), res, fail); // 检查通信对象指针是否有效
+  NCCLCHECKGOTO(PtrCheck(config, "CommInitRank", "config"), res, fail); // 检查配置结构体指针是否有效
   if (nranks < 1 || myrank < 0 || myrank >= nranks) {
     WARN("Invalid rank requested : %d/%d", myrank, nranks);
     res = ncclInvalidArgument;
     goto fail;
   }
-
-  NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail);
-  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);
-  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->abortFlagDev, 1), res, fail);
-  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlagRefCount, 1), res, fail);
+  
+  // 配置NCCL通信器的一些属性，是否阻塞，通信通道数量等
+  NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail); // 为通信对象分配内存
+  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail); // 设置通信对象的开始和结束魔术数，用于检测通信对象损坏
+  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->abortFlagDev, 1), res, fail); // 为通信对象的中断标志分配内存
+  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlagRefCount, 1), res, fail); // 为通信对象的中断标志引用计数分配内存
   comm->startMagic = comm->endMagic = NCCL_MAGIC; // Used to detect comm corruption.
-  *comm->abortFlagRefCount = 1;
+  *comm->abortFlagRefCount = 1; // 初始化中断标志引用计数为1
   NCCLCHECKGOTO(parseCommConfig(comm, config), res, fail);
   /* start with ncclInternalError and will be changed to ncclSuccess if init succeeds. */
-  comm->initState = ncclInternalError;
+  comm->initState = ncclInternalError; // 初始化通信对象的状态为内部错误，若初始化成功则修改为成功
   *newcomm = comm;
 
-  NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail);
-  job->comm = comm;
-  job->nranks = nranks;
-  job->commId = commId; // C++ struct assignment
-  job->myrank = myrank;
-  job->cudaDev = cudaDev;
+  // 分配一个作业对象 job,并设置作业对象的各个成员变量
+  NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail); // 为异步任务结构体分配内存
+  job->comm = comm; // 设置异步任务的通信对象
+  job->nranks = nranks; // 设置异步任务的节点数量
+  job->commId = commId; // C++ struct assignment // 设置异步任务的唯一ID
+  job->myrank = myrank; // 设置异步任务的当前节点rank
+  job->cudaDev = cudaDev; // 设置异步任务的CUDA设备号
+  // 使用 ncclAsyncLaunch 异步启动 ncclCommInitRankFunc 函数来初始化通信。当这个函数完成时，它将自动调用 free 函数来释放 comm 对象
   NCCLCHECKGOTO(ncclAsyncLaunch(&job->base, ncclCommInitRankFunc, NULL, free, comm), res, fail);
 
 exit:
-  return ncclGroupErrCheck(res);
+  return ncclGroupErrCheck(res); // 返回最终的结果，检查是否有错误发生
 fail:
   if (comm) {
     free(comm->abortFlag);
-    if (comm->abortFlagDev) ncclCudaHostFree((void*)comm->abortFlagDev);
-    free(comm->abortFlagRefCount);
-    free(comm);
+    if (comm->abortFlagDev) ncclCudaHostFree((void*)comm->abortFlagDev); // 如果存在中断标志，释放其内存
+    free(comm->abortFlagRefCount); // 释放中断标志引用计数的内存
+    free(comm); // 释放通信对象的内存
   }
   if (newcomm) *newcomm = NULL;
   goto exit;
@@ -1694,15 +1700,18 @@ constexpr nvtxPayloadSchemaEntry_t CommInitRankSchema[] = {
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)
-  (void)ncclCudaLibraryInit();
+  (void)ncclCudaLibraryInit(); // 加载CUDA驱动
 
-  int cudaDev;
-  ncclConfig_t config = NCCL_CONFIG_INITIALIZER;
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  int cudaDev; // 声明一个变量来存储当前CUDA设备的ID  
+  ncclConfig_t config = NCCL_CONFIG_INITIALIZER; // 初始化NCCL配置结构体，使用默认的配置
+  CUDACHECK(cudaGetDevice(&cudaDev)); // 获取当前CUDA设备ID
 
   NvtxParamsCommInitRank payload{myrank, nranks, cudaDev};
   NVTX3_FUNC_WITH_PARAMS(CommInitRank, CommInitRankSchema, payload)
 
+  // 根据rank号和CUDA设备ID等，完成NCCL通信器初始化
+  // 调用ncclCommInitRankDev函数来初始化NCCL通信器  
+  // ncclCommInitRankDev是一个更底层的函数，它允许指定CUDA设备ID和NCCL配置   
   NCCLCHECK(ncclCommInitRankDev(newcomm, nranks, commId, myrank, cudaDev, &config));
   return ncclSuccess;
 }

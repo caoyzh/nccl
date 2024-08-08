@@ -53,10 +53,10 @@ void initEnv() {
   const char * userDir = userHomeDir();
   if (userDir) {
     sprintf(confFilePath, "%s/.nccl.conf", userDir);
-    setEnvFile(confFilePath);
+    setEnvFile(confFilePath); // 根据配置文件初始化设置
   }
   sprintf(confFilePath, "/etc/nccl.conf");
-  setEnvFile(confFilePath);
+  setEnvFile(confFilePath); // 根据配置文件初始化设置
 }
 
 void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache) {

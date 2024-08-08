@@ -98,6 +98,7 @@ static int envSocketFamily(void) {
   return family;
 }
 
+// 遍历机器上所有的网卡信息。通过prefixList匹配选择使用哪些网卡，将可用网卡的信息保存下来，将ifa_name保存到全局的bootstrapNetIfNames，ip地址保存到全局bootstrapNetIfAddrs，默认除了docker和lo其他的网卡都可以使用
 static int findInterfaces(const char* prefixList, char* names, union ncclSocketAddress *addrs, int sock_family, int maxIfNameSize, int maxIfs) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
@@ -326,7 +327,7 @@ int ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs, int ifNa
   // Allow user to force the INET socket family selection
   int sock_family = envSocketFamily();
   // User specified interface
-  const char* env = ncclGetEnv("NCCL_SOCKET_IFNAME");
+  const char* env = ncclGetEnv("NCCL_SOCKET_IFNAME"); // 环境变量NCCL_SOCKET_IFNAME可以用来指定想用的网卡名，例如通过export NCCL_SOCKET_IFNAME= xxx 指定
   if (env && strlen(env) > 1) {
     INFO(NCCL_ENV, "NCCL_SOCKET_IFNAME set by environment to %s", env);
     // Specified by user : find or fail

@@ -203,17 +203,17 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
   memset(handle, 0, sizeof(ncclBootstrapHandle));
 
   const char* env = ncclGetEnv("NCCL_COMM_ID");
-  if (env) {
+  if (env) { // 如果环境变量中有NCCL_COMM_ID的值，将环境变量解析为网络地址，赋值给ncclUniqueId的后半部分
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
-    if (ncclSocketGetAddrFromString(&handle->addr, env) != ncclSuccess) {
+    if (ncclSocketGetAddrFromString(&handle->addr, env) != ncclSuccess) { // // 尝试将环境变量中的字符串解析为一个网络地址，存储在handle的addr字段中
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;
     }
     handle->magic = NCCL_MAGIC;
-  } else {
-    NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
-    memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
-    NCCLCHECK(bootstrapCreateRoot(handle, false));
+  } else { // 如果环境变量中没有NCCL_COMM_ID的值，将bootstrap网络地址，赋值给ncclUniqueId的后半部分
+    NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic))); // 生成一个随机的magic值，并存储在handle的magic字段中 
+    memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress)); // 如果环境变量不存在，则将默认的bootstrap网络地址复制到handle的addr字段中
+    NCCLCHECK(bootstrapCreateRoot(handle, false)); // 尝试创建一个根节点（可能是启动NCCL通信的服务器或领导者节点）
   }
 
   return ncclSuccess;
