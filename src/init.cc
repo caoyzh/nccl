@@ -808,52 +808,52 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   timers[TIMER_INIT_TOPO] = clockNano();
   // Topo detection / System graph creation
-  NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
+  NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail); // 获取系统的拓扑信息，并存储在comm的topo成员中 
   // Compute paths between GPUs and NICs
-  NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
+  NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail); // 在已获取的拓扑中，计算GPU和NIC之间的路径
   // Remove inaccessible GPUs and unused NICs
-  NCCLCHECKGOTO(ncclTopoTrimSystem(comm->topo, comm), ret, fail);
+  NCCLCHECKGOTO(ncclTopoTrimSystem(comm->topo, comm), ret, fail); // 根据计算结果，移除不可访问的GPU和未使用的NIC
   // Recompute paths after trimming
-  NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
+  NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail); // 在移除不可访问的组件后，重新计算路径
   // Init search
-  NCCLCHECKGOTO(ncclTopoSearchInit(comm->topo), ret, fail);
+  NCCLCHECKGOTO(ncclTopoSearchInit(comm->topo), ret, fail); // 初始化拓扑搜索
   // Decide on comm's CPU architecture.
   NCCLCHECKGOTO(ncclTopoComputeCommCPU(comm), ret, fail);
   // Print final topology
-  NCCLCHECKGOTO(ncclTopoPrint(comm->topo), ret, fail);
+  NCCLCHECKGOTO(ncclTopoPrint(comm->topo), ret, fail); // 打印最终的拓扑结构，用于调试或信息展示
   timers[TIMER_INIT_TOPO] = clockNano() - timers[TIMER_INIT_TOPO];
 
   // Set Affinity to a CPU local the our GPU, so that all memory we allocate
   // on the host is local.
-  NCCLCHECKGOTO(ncclTopoGetCpuAffinity(comm->topo, comm->rank, &comm->cpuAffinity), ret, fail);
-  if (CPU_COUNT(&comm->cpuAffinity)) {
-    sched_getaffinity(0, sizeof(cpu_set_t), &affinitySave);
-    sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+  NCCLCHECKGOTO(ncclTopoGetCpuAffinity(comm->topo, comm->rank, &comm->cpuAffinity), ret, fail); // 获取与当前GPU本地化的CPU亲和性，即哪些CPU与当前GPU通信效率最高
+  if (CPU_COUNT(&comm->cpuAffinity)) { // 如果找到了与GPU匹配的CPU亲和性（即找到了可用的CPU集合）
+    sched_getaffinity(0, sizeof(cpu_set_t), &affinitySave); // 保存当前线程的CPU亲和性设置（可能是为了之后恢复）
+    sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity); // 将当前线程的CPU亲和性设置为与GPU匹配的CPU集合
   }
 
   // Determine local CollNet support
-  if (collNetSupport(comm)) {
-    const char *collNetEnable = ncclGetEnv("NCCL_COLLNET_ENABLE");
-    if (collNetEnable != NULL) {
+  if (collNetSupport(comm)) { // 检查本地是否支持CollNet（NCCL的一种优化）
+    const char *collNetEnable = ncclGetEnv("NCCL_COLLNET_ENABLE"); // 获取环境变量NCCL_COLLNET_ENABLE的值，决定是否启用CollNet
+    if (collNetEnable != NULL) { // 如果环境变量已设置，打印信息到日志或控制台 
       INFO(NCCL_ALL, "NCCL_COLLNET_ENABLE set by environment to %s.", collNetEnable);
-      if (strcmp(collNetEnable, "1") == 0) {
+      if (strcmp(collNetEnable, "1") == 0) { // 如果环境变量值为"1"，则启用CollNet支持
         comm->collNetSupport = 1;
       }
     }
   }
 
   // Determine local Nvls support
-  NCCLCHECK(ncclNvlsInit(comm));
+  NCCLCHECK(ncclNvlsInit(comm));  // 初始化Nvls支持第三代NVSwitch系统（NVLink4）
 
   timers[TIMER_INIT_GRAPHS] = clockNano();
-  // Get rings and trees
+  // Get rings and trees: 初始化环图结构，用于表示环形的通信模式
   memset(ringGraph, 0, sizeof(struct ncclTopoGraph));
   ringGraph->id = 0;
   ringGraph->pattern = NCCL_TOPO_PATTERN_RING;
   ringGraph->minChannels = 1;
   ringGraph->maxChannels = MAXCHANNELS/2;
-  NCCLCHECKGOTO(ncclTopoCompute(comm->topo, ringGraph), ret, fail);
-  NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, ringGraph), ret, fail);
+  NCCLCHECKGOTO(ncclTopoCompute(comm->topo, ringGraph), ret, fail); // 在已获取的拓扑中，计算环图的通信信息
+  NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, ringGraph), ret, fail); // 打印环图的拓扑结构，用于调试或信息展示
 
   memset(treeGraph, 0, sizeof(struct ncclTopoGraph));
   treeGraph->id = 1;
@@ -1376,6 +1376,9 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   NCCLCHECK(ncclInitKernelsForDevice(cudaArch, &maxLocalSizeBytes)); // 为指定设备初始化NCCL内核
   // Set the maximum kernel stack size of all kernels to avoid
   // a CUDA memory reconfig on load (c.f. NVSHMEM issue)
+
+  // 如果内核栈的最大大小大于0且允许设置栈大小，则设置CUDA设备的栈大小限制  
+  // 这可以避免在加载时重新配置CUDA内存（例如，NVSHMEM问题） 
   if (maxLocalSizeBytes > 0 && ncclParamSetStackSize() == 1) {
     TRACE(NCCL_INIT, "Setting cudaLimitStackSize to %zu", maxLocalSizeBytes);
     CUDACHECKIGNORE(cudaDeviceSetLimit(cudaLimitStackSize, maxLocalSizeBytes));
@@ -1383,40 +1386,56 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   timers[TIMER_INIT_KERNELS] = clockNano() - timers[TIMER_INIT_KERNELS];
 
   timers[TIMER_INIT_BOOTSTRAP] = clockNano();
+
+  /*2、是否有父通信器
+        a、有，从父通信器分裂出来子通信器，并初始化
+        b、无，直接为其分配内存，并初始化*/
+  // 如果指定了父通信器 
   if (job->parent) {
+    // 为父通信器的rank分配内存  
     NCCLCHECKGOTO(ncclCalloc(&parentRanks, job->parent->nRanks), res, fail);
     NCCLCHECKGOTO(commGetSplitInfo(comm, job->parent, job->color, job->key, &job->nranks, &job->myrank, parentRanks), res, fail);
     // Negative color does not create a new comm object. We needed to take part in the allgather, but we're done now.
+
+    // 如果color为负，表示只是参与了一个allgather操作，但不需要创建新的通信器  
+    // 我们已经完成了需要做的部分，因此跳转到exit标签 
     if (job->color == NCCL_SPLIT_NOCOLOR) goto exit;
+    // 生成一个唯一的通信器ID，该ID基于父通信器的哈希值 
     snprintf((char*)&job->commId, sizeof(job->commId), "%016lx-%d", job->parent->commHash, job->color);
+    // 分配通信器资源  
     NCCLCHECKGOTO(commAlloc(comm, job->parent, job->nranks, job->myrank), res, fail);
+    // 初始化分裂后的通信器
     NCCLCHECKGOTO(bootstrapSplit((struct ncclBootstrapHandle*)&job->commId, comm, job->parent, job->color, job->key, parentRanks), res, fail);
   } else {
+    // 如果没有指定父通信器，则为新的通信器分配资源 
     NCCLCHECKGOTO(commAlloc(comm, NULL, job->nranks, job->myrank), res, fail);
+    // 初始化新的通信器 
     NCCLCHECKGOTO(bootstrapInit((struct ncclBootstrapHandle*)&job->commId, comm), res, fail);
   }
   timers[TIMER_INIT_BOOTSTRAP] = clockNano() - timers[TIMER_INIT_BOOTSTRAP];
 
+  // 设置通信器的CUDA架构版本和哈希值
   comm->cudaArch = cudaArch;
+  // // 根据通信器的唯一ID计算哈希值，并设置为通信器的哈希值
   comm->commHash = getHash(job->commId.internal, NCCL_UNIQUE_ID_BYTES);
 
-  if (job->parent) {
+  if (job->parent) { // 如果指定了父通信器，打印通信器的分裂信息
     INFO(NCCL_INIT,"ncclCommSplit comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx parent %p color %d key %d commId 0x%llx - Init START",
     comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, job->parent, job->color, job->key, (unsigned long long)hashUniqueId(job->commId));
-  } else {
+  } else { // 如果没有指定父通信器，打印通信器的初始化信息
     INFO(NCCL_INIT,"ncclCommInitRank comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx commId 0x%llx - Init START",
     comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, (unsigned long long)hashUniqueId(job->commId));
   }
 
-  NCCLCHECKGOTO(initTransportsRank(comm, job->parent, timers), res, fail);
+  NCCLCHECKGOTO(initTransportsRank(comm, job->parent, timers), res, fail); // 根据通信器的配置，初始化所有的传输层
 
-  NCCLCHECKGOTO(ncclTunerPluginLoad(comm), res, fail);
-  if (comm->tuner) {
+  NCCLCHECKGOTO(ncclTunerPluginLoad(comm), res, fail); // 加载NCCL的调优插件
+  if (comm->tuner) { // 如果成功加载了调优插件，调用其初始化函数
     NCCLCHECK(comm->tuner->init(comm->nRanks, comm->nNodes, ncclDebugLog, &comm->tunerContext));
   }
 
   // update communicator state
-  comm->initState = ncclSuccess;
+  comm->initState = ncclSuccess; // 更新通信器状态为成功，表示通信器初始化成功
   timers[TIMER_INIT_TOTAL] = clockNano() - timers[TIMER_INIT_TOTAL];
 
   // Trace this call for replay tool

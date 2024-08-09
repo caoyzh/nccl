@@ -241,89 +241,93 @@ struct bootstrapState {
   volatile uint32_t *abortFlag;
 };
 
+// 函数的输入handle就是UniqueID，被强制转化欸ncclBootstrapHandle，包含rank0的网络地址
 ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* comm) {
-  int rank = comm->rank;
-  int nranks = comm->nRanks;
+  int rank = comm->rank; // 获取当前节点的rank
+  int nranks = comm->nRanks; // 获取参与节点的数量
   struct bootstrapState* state;
   struct ncclSocket* proxySocket;
   ncclSocketAddress nextAddr;
   struct ncclSocket sock, listenSockRoot;
-  struct extInfo info = { 0 };
+  struct extInfo info = { 0 }; // 为当前节点准备发送给其他节点的信息
 
+  // 分配内存并初始化bootstrapState结构体，用于管理启动阶段的状态
   NCCLCHECK(ncclCalloc(&state, 1));
   state->rank = rank;
   state->nranks = nranks;
-  state->abortFlag = comm->abortFlag;
-  comm->bootstrap = state;
-  comm->magic = state->magic = handle->magic;
+  state->abortFlag = comm->abortFlag; // 设置是否应中止通信的标志
+  comm->bootstrap = state;// 将bootstrapState指针赋予comm结构体
+  comm->magic = state->magic = handle->magic;// 设置魔术数字，用于校验
 
   TRACE(NCCL_INIT, "rank %d nranks %d", rank, nranks);
 
   info.rank = rank;
   info.nranks = nranks;
-  // Create socket for other ranks to contact me
-  NCCLCHECK(ncclSocketInit(&state->listenSock, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag));
-  NCCLCHECK(ncclSocketListen(&state->listenSock));
+  // Create socket for other ranks to contact me: 创建一个监听套接字，允许其他节点联系当前节点
+  NCCLCHECK(ncclSocketInit(&state->listenSock, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag)); // 初始化监听套接字
+  NCCLCHECK(ncclSocketListen(&state->listenSock)); // 设置监听状态
   NCCLCHECK(ncclSocketGetAddr(&state->listenSock, &info.extAddressListen));
 
-  // Create socket for root to contact me
-  NCCLCHECK(ncclSocketInit(&listenSockRoot, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag));
-  NCCLCHECK(ncclSocketListen(&listenSockRoot));
-  NCCLCHECK(ncclSocketGetAddr(&listenSockRoot, &info.extAddressListenRoot));
+  // Create socket for root to contact me: 创建另一个监听套接字，允许根节点联系当前节点
+  NCCLCHECK(ncclSocketInit(&listenSockRoot, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag)); // 初始化监听套接字
+  NCCLCHECK(ncclSocketListen(&listenSockRoot)); // 设置监听状态
+  NCCLCHECK(ncclSocketGetAddr(&listenSockRoot, &info.extAddressListenRoot)); // 获取监听套接字的地址
 
-  // stagger connection times to avoid an overload of the root
+  // stagger connection times to avoid an overload of the root: 如果参与节点的数量大于128，则延迟连接到根节点，以减轻根节点的负载
   if (nranks > 128) {
-    long msec = rank;
+    long msec = rank; // 计算延迟时间
     struct timespec tv;
     tv.tv_sec = msec / 1000;
     tv.tv_nsec = 1000000 * (msec % 1000);
     TRACE(NCCL_INIT, "rank %d delaying connection to root by %ld msec", rank, msec);
-    (void) nanosleep(&tv, NULL);
+    (void) nanosleep(&tv, NULL); // 延迟指定时间
   }
 
-  // send info on my listening socket to root
-  NCCLCHECK(ncclSocketInit(&sock, &handle->addr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag));
-  NCCLCHECK(ncclSocketConnect(&sock));
-  NCCLCHECK(bootstrapNetSend(&sock, &info, sizeof(info)));
-  NCCLCHECK(ncclSocketClose(&sock));
+  // send info on my listening socket to root: 根据rank0的网络地址，建立socket并向rank0发送自己的网络地址
+  NCCLCHECK(ncclSocketInit(&sock, &handle->addr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag)); // 初始化套接字
+  NCCLCHECK(ncclSocketConnect(&sock)); // 连接到根节点
+  NCCLCHECK(bootstrapNetSend(&sock, &info, sizeof(info))); // 发送信息
+  NCCLCHECK(ncclSocketClose(&sock)); // 关闭套接字
 
-  // get info on my "next" rank in the bootstrap ring from root
-  NCCLCHECK(ncclSocketInit(&sock));
-  NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
-  NCCLCHECK(bootstrapNetRecv(&sock, &nextAddr, sizeof(union ncclSocketAddress)));
-  NCCLCHECK(ncclSocketClose(&sock));
-  NCCLCHECK(ncclSocketClose(&listenSockRoot));
+  // get info on my "next" rank in the bootstrap ring from root: rank0告诉每个rank它的下一个节点网络地址，完成环形网络建立
+  NCCLCHECK(ncclSocketInit(&sock)); // 初始化套接字
+  NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot)); // 接受来自根节点的连接请求
+  NCCLCHECK(bootstrapNetRecv(&sock, &nextAddr, sizeof(union ncclSocketAddress))); // 接收信息
+  NCCLCHECK(ncclSocketClose(&sock)); // 关闭套接字
+  NCCLCHECK(ncclSocketClose(&listenSockRoot)); // 关闭根节点的监听套接字
 
-  NCCLCHECK(ncclSocketInit(&state->ringSendSocket, &nextAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag));
-  NCCLCHECK(ncclSocketConnect(&state->ringSendSocket));
-  // Accept the connect request from the previous rank in the AllGather ring
-  NCCLCHECK(ncclSocketInit(&state->ringRecvSocket));
-  NCCLCHECK(ncclSocketAccept(&state->ringRecvSocket, &state->listenSock));
+  // 初始化与下一个节点的发送套接字
+  NCCLCHECK(ncclSocketInit(&state->ringSendSocket, &nextAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag)); // 初始化套接字
+  NCCLCHECK(ncclSocketConnect(&state->ringSendSocket)); // 连接到下一个节点
+  // Accept the connect request from the previous rank in the AllGather ring: // 接受来自前一个节点的环连接请求
+  NCCLCHECK(ncclSocketInit(&state->ringRecvSocket)); // 初始化套接字
+  NCCLCHECK(ncclSocketAccept(&state->ringRecvSocket, &state->listenSock)); // 接受连接请求
 
-  // AllGather all listen handlers
-  NCCLCHECK(ncclCalloc(&state->peerCommAddresses, nranks));
-  NCCLCHECK(ncclSocketGetAddr(&state->listenSock, state->peerCommAddresses+rank));
-  NCCLCHECK(bootstrapAllGather(state, state->peerCommAddresses, sizeof(union ncclSocketAddress)));
+  // AllGather all listen handlers: AllGather全局收集所有节点的网络地址
+  NCCLCHECK(ncclCalloc(&state->peerCommAddresses, nranks)); // 分配内存
+  NCCLCHECK(ncclSocketGetAddr(&state->listenSock, state->peerCommAddresses+rank)); // 获取当前节点的监听器地址
+  NCCLCHECK(bootstrapAllGather(state, state->peerCommAddresses, sizeof(union ncclSocketAddress))); // 全局收集监听器地址
 
   // Create the service proxy
   NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
   NCCLCHECK(ncclCalloc(&state->peerProxyAddressesUDS, nranks));
 
+  // 初始化服务代理
   // proxy is aborted through a message; don't set abortFlag
-  NCCLCHECK(ncclCalloc(&proxySocket, 1));
-  NCCLCHECK(ncclSocketInit(proxySocket, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeProxy, comm->abortFlag));
-  NCCLCHECK(ncclSocketListen(proxySocket));
-  NCCLCHECK(ncclSocketGetAddr(proxySocket, state->peerProxyAddresses+rank));
-  NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)));
+  NCCLCHECK(ncclCalloc(&proxySocket, 1)); // 分配内存
+  NCCLCHECK(ncclSocketInit(proxySocket, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeProxy, comm->abortFlag)); // 初始化套接字
+  NCCLCHECK(ncclSocketListen(proxySocket)); // 设置监听状态
+  NCCLCHECK(ncclSocketGetAddr(proxySocket, state->peerProxyAddresses+rank)); // 获取当前节点的代理地址
+  NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress))); // 全局收集代理地址
   // cuMem UDS support
   // Make sure we create a unique UDS socket name
   uint64_t randId;
   NCCLCHECK(getRandomData(&randId, sizeof(randId)));
-  state->peerProxyAddressesUDS[rank] = getPidHash()+randId;
-  NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddressesUDS, sizeof(*state->peerProxyAddressesUDS)));
-  NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS));
+  state->peerProxyAddressesUDS[rank] = getPidHash()+randId; // 生成唯一的UDS名称
+  NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddressesUDS, sizeof(*state->peerProxyAddressesUDS))); // 全局收集UDS名称
+  NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS)); // 初始化代理
 
-  TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
+  TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks); // 记录完成初始化的消息
 
   return ncclSuccess;
 }
