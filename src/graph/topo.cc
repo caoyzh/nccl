@@ -721,19 +721,21 @@ ncclResult_t ncclTopoRefreshBcmP2pLinks(void) {
 
 ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system) {
   struct ncclXml* xml;
-  NCCLCHECK(xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES));
-  const char* xmlTopoFile = ncclGetEnv("NCCL_TOPO_FILE");
-  if (xmlTopoFile) {
+  NCCLCHECK(xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES)); // 分配一个XML结构，用于存储拓扑信息
+
+  // 尝试从文件加载已有拓扑信息
+  const char* xmlTopoFile = ncclGetEnv("NCCL_TOPO_FILE"); // 从环境变量中获取XML拓扑文件的路径
+  if (xmlTopoFile) { // 如果环境变量设置了，则打印信息并加载该文件到xml结构中
     INFO(NCCL_ENV, "NCCL_TOPO_FILE set by environment to %s", xmlTopoFile);
     NCCLCHECK(ncclTopoGetXmlFromFile(xmlTopoFile, xml, 1));
-  } else {
+  } else { // 如果没有设置环境变量，则尝试从默认位置加载XML拓扑文件
     // Try default XML topology location
     NCCLCHECK(ncclTopoGetXmlFromFile("/var/run/nvidia-topologyd/virtualTopology.xml", xml, 0));
   }
-  if (xml->maxIndex == 0) {
+  if (xml->maxIndex == 0) { // 如果xml结构中没有任何节点（即没有加载到任何拓扑信息） 
     // Create top tag
     struct ncclXmlNode* top;
-    NCCLCHECK(xmlAddNode(xml, NULL, "system", &top));
+    NCCLCHECK(xmlAddNode(xml, NULL, "system", &top)); // 创建一个名为"system"的根节点，并设置其版本属性 
     NCCLCHECK(xmlSetAttrInt(top, "version", NCCL_TOPO_XML_VERSION));
   }
 
@@ -745,60 +747,72 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   struct ncclXmlNode* node;
   NCCLCHECK(ncclTopoFillGpu(xml, busId, &node));
   if (node) {
-    NCCLCHECK(xmlSetAttrInt(node, "keep", 1));
-    NCCLCHECK(xmlSetAttrInt(node, "rank", comm->rank));
-    NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport));
+    NCCLCHECK(xmlSetAttrInt(node, "keep", 1)); // 设置该GPU节点的"keep"属性为1，表示需要保留这个节点
+    NCCLCHECK(xmlSetAttrInt(node, "rank", comm->rank)); // 设置该GPU节点的"rank"属性
+    NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport)); // 设置该GPU节点的"gdr"属性，表示是否支持GPU Direct RDMA
   }
+
+  // 遍历所有网络设备，拓扑树中添加网络拓扑节点
   // Auto-detect NICs if needed. net/collnet share the same xml/graph nodes,
   // so we start with collnet so that it has precedence.
-  int netDevCount = 0;
-  if (collNetSupport(comm)) {
-    NCCLCHECK(collNetDevices(comm, &netDevCount));
-    for (int n=0; n<netDevCount; n++) {
-      ncclNetProperties_t props;
-      NCCLCHECK(collNetGetProperties(comm, n, &props));
-      struct ncclXmlNode* netNode;
-      NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
-      NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
-      NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
+  int netDevCount = 0; // 初始化网络设备计数为0
+  if (collNetSupport(comm)) { // 如果comm支持collNet
+    NCCLCHECK(collNetDevices(comm, &netDevCount)); // 获取comm支持的网络设备数量
+    for (int n=0; n<netDevCount; n++) { // 遍历每个网络设备 
+      ncclNetProperties_t props; // 定义一个ncclNetProperties_t类型的变量props，用于存储设备属性
+      NCCLCHECK(collNetGetProperties(comm, n, &props)); // 获取第n个网络设备的属性
+      struct ncclXmlNode* netNode; // 创建一个XML节点来表示这个网络设备
+      NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode)); // 使用设备的pci路径和名称来填充XML节点
+      NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1)); // 将"keep"属性设置为1，可能表示这个节点需要被保留
+      NCCLCHECK(xmlSetAttrInt(netNode, "dev", n)); // 将"dev"属性设置为n，表示这是第n个设备
+      // 将速度、端口、GUID等属性添加到XML节点中
       NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
       NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
       NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
       NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms));
-      bool gdrSupport = (props.ptrSupport & NCCL_PTR_CUDA) || (comm->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF));
-      INFO(NCCL_NET,"NET/%s : GPU Direct RDMA %s for HCA %d '%s'", comm->ncclNet->name, gdrSupport ? "Enabled" : "Disabled", n, props.name);
-      NCCLCHECK(xmlInitAttrInt(netNode, "gdr", gdrSupport));
-      NCCLCHECK(xmlInitAttrInt(netNode, "coll", 1));
+      bool gdrSupport = (props.ptrSupport & NCCL_PTR_CUDA) || (comm->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF)); // 检查是否支持GPU Direct RDMA（GDR）
+      INFO(NCCL_NET,"NET/%s : GPU Direct RDMA %s for HCA %d '%s'", comm->ncclNet->name, gdrSupport ? "Enabled" : "Disabled", n, props.name); // 打印GDR支持状态和设备信息
+      NCCLCHECK(xmlInitAttrInt(netNode, "gdr", gdrSupport)); // 将GDR支持状态添加到XML节点中
+      NCCLCHECK(xmlInitAttrInt(netNode, "coll", 1)); // 将"coll"属性设置为1，可能表示这是一个集合通信网络接口
     }
   }
   if (netDevCount == 0) {
     NCCLCHECK(comm->ncclNet->devices(&netDevCount));
   }
-  for (int n=0; n<netDevCount; n++) {
-    ncclNetProperties_t props;
+  for (int n=0; n<netDevCount; n++) { // 循环遍历所有的网络设备，其中 netDevCount 是网络设备的总数
+    ncclNetProperties_t props; // 定义一个 ncclNetProperties_t 类型的变量 props，用于存储网络设备的属性
+    // 调用 getProperties 函数获取网络设备的属性，并检查调用是否成功  
+    // 参数 n 是当前网络设备的索引，&props 是用于存储属性的指针  
     NCCLCHECK(comm->ncclNet->getProperties(n, &props));
     comm->netDeviceType = props.netDeviceType;
-    struct ncclXmlNode* netNode;
+    struct ncclXmlNode* netNode; // 定义一个指向 ncclXmlNode 结构的指针 netNode，该结构将用于表示 XML 中的节点
+    // 调用 ncclTopoFillNet 函数在 XML 结构中创建一个新的节点，并检查调用是否成功
+    // 参数 xml 是 XML 结构的指针，props.pciPath 和 props.name 是网络设备的 PCI 路径和名称, &netNode 是用于存储新节点指针的指针
     NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
-    NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
-    NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
-    NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
-    NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
-    NCCLCHECK(xmlInitAttrFloat(netNode, "latency", props.latency));
-    NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
-    NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms));
+    NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1)); // 设置新节点的 keep 属性为 1，表示该节点应该被保留
+    NCCLCHECK(xmlSetAttrInt(netNode, "dev", n)); // 设置新节点的 dev 属性为当前网络设备的索引 n
+    NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed)); // 设置新节点的 speed 属性为网络设备的速度
+    NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port)); // 设置新节点的 port 属性为网络设备的端口号
+    NCCLCHECK(xmlInitAttrFloat(netNode, "latency", props.latency)); // 设置新节点的 latency 属性为网络设备的延迟
+    NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid)); // 设置新节点的 guid 属性为网络设备的全局唯一标识符
+    NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms)); // 设置新节点的 maxconn 属性为网络设备支持的最大并发通信数
+    // 检查网络设备是否支持 GPU Direct RDMA
+    // 如果 props.ptrSupport 包含 NCCL_PTR_CUDA 或者如果 comm->dmaBufSupport 为真且 props.ptrSupport 包含 NCCL_PTR_DMABUF，则 gdrSupport 为真
     bool gdrSupport = (props.ptrSupport & NCCL_PTR_CUDA) || (comm->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF));
+    // 打印日志信息，显示网络设备是否支持 GPU Direct RDMA
+    // 其中 comm->ncclNet->name 是网络设备的名称，n 是设备的索引，props.name 是设备的名字
     INFO(NCCL_NET,"NET/%s : GPU Direct RDMA %s for HCA %d '%s'", comm->ncclNet->name, gdrSupport ? "Enabled" : "Disabled", n, props.name);
-    NCCLCHECK(xmlInitAttrInt(netNode, "gdr", gdrSupport));
+    NCCLCHECK(xmlInitAttrInt(netNode, "gdr", gdrSupport)); // 设置新节点的 gdr 属性，表示是否支持 GPU Direct RDMA
   }
 
-  // Remove XML branches which don't have a node with keep="1" (typically when importing a topology)
+  // 移除不可用的节点
+  // Remove XML branches which don't have a node with keep="1" (typically when importing a topology): 移除 XML 中不包含 keep="1" 节点的分支
   NCCLCHECK(ncclTopoTrimXml(xml));
 
   // XML topo fusion.
   int* localRanks;
   int localRank = -1, nLocalRanks = 0;
-  if (comm->MNNVL) {
+  if (comm->MNNVL) { // 如果 MNNVL被启用
     // MNNVL clique support
     nLocalRanks = comm->clique.size;
     localRank = comm->cliqueRank;
@@ -818,7 +832,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   NCCLCHECK(ncclCalloc(&mem, nLocalRanks * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)));
   struct ncclXml* rankXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*localRank);
   memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
-  NCCLCHECK(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1));
+  NCCLCHECK(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1)); // 将当前集群成员的 XML 数据转换为内部表示形式（可能是为了更高效的通信）
   NCCLCHECK(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem, xmlMemSize(NCCL_TOPO_XML_MAX_NODES)));
   if (comm->MNNVL) {
     // Ensure that we have enough room when fusing topos from multiple nodes.
@@ -831,18 +845,18 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   }
   for (int i = 0; i < nLocalRanks; i++) {
     struct ncclXml* peerXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*i);
-    NCCLCHECK(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0));
-    NCCLCHECK(ncclTopoFuseXml(xml, peerXml));
+    NCCLCHECK(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0)); // 将 XML 数据转换为内部表示形式（这次可能为了融合做准备）
+    NCCLCHECK(ncclTopoFuseXml(xml, peerXml)); // 将当前成员的 XML 数据融合到 cliqueXml 中 
   }
   free(mem);
-
-  xmlTopoFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");
+  // 保持拓扑文件
+  xmlTopoFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE"); // 获取环境变量 NCCL_TOPO_DUMP_FILE 的值，用于存储 XML 拓扑数据 
   if (xmlTopoFile && comm->rank == ncclParamTopoDumpFileRank()) {
     INFO(NCCL_ENV, "NCCL_TOPO_DUMP_FILE set by environment to %s", xmlTopoFile);
-    NCCLCHECK(ncclTopoDumpXmlToFile(xmlTopoFile, xml));
+    NCCLCHECK(ncclTopoDumpXmlToFile(xmlTopoFile, xml)); // 将融合后的 XML 拓扑数据写入到指定的文件中
   }
 
-  NCCLCHECK(ncclTopoGetSystemFromXml(xml, system, comm->peerInfo[comm->rank].hostHash));
+  NCCLCHECK(ncclTopoGetSystemFromXml(xml, system, comm->peerInfo[comm->rank].hostHash)); // 从 XML 数据中提取系统信息，并存储在 system 中
   free(xml);
   return ncclSuccess;
 }

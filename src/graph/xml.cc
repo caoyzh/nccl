@@ -532,11 +532,15 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
   return ncclSuccess;
 }
 
+// 定义一个函数ncclTopoGetPciNode，它接受一个ncclXml结构体指针xml，一个字符串指针busId用于指定PCI节点的busid，  
+// 以及一个指向ncclXmlNode指针的指针pciNode，用于返回找到的或新创建的PCI节点的地址。
 ncclResult_t ncclTopoGetPciNode(struct ncclXml* xml, const char* busId, struct ncclXmlNode** pciNode) {
-  NCCLCHECK(xmlFindTagKv(xml, "pci", pciNode, "busid", busId));
-  if (*pciNode == NULL) {
+  NCCLCHECK(xmlFindTagKv(xml, "pci", pciNode, "busid", busId)); // 在xml中查找标签为"pci"且属性"busid"等于busId的节点。如果找到，将找到的节点的地址存储在*pciNode中。
+  if (*pciNode == NULL) { // 如果*pciNode是NULL，表示没有找到与busId相对应的PCI节点
+    // 调用xmlAddNode函数在xml中添加一个新的"pci"节点，并将其地址存储在*pciNode中。  
+    // 这里的NULL作为父节点参数，意味着新节点将被添加到XML树的根目录下。
     NCCLCHECK(xmlAddNode(xml, NULL, "pci", pciNode));
-    NCCLCHECK(xmlSetAttr(*pciNode, "busid", busId));
+    NCCLCHECK(xmlSetAttr(*pciNode, "busid", busId)); // 调用xmlSetAttr函数设置新创建的PCI节点的"busid"属性为busId
   }
   return ncclSuccess;
 }
@@ -557,21 +561,24 @@ int checkBDFFormat(char* bdf) {
 ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* xml) {
   // Fill info, then parent
   const char* busId;
-  NCCLCHECK(xmlGetAttr(pciNode, "busid", &busId));
-  char* path = NULL;
-  ncclDebugNoWarn = NCCL_GRAPH;
-  getPciPath(busId, &path);
-  ncclDebugNoWarn = 0;
+  NCCLCHECK(xmlGetAttr(pciNode, "busid", &busId)); // 从pciNode节点中获取busid属性 
+  char* path = NULL; // 分配一个字符指针path，用于存储PCI设备的路径（初始化为NULL）
+  ncclDebugNoWarn = NCCL_GRAPH; // 临时设置ncclDebugNoWarn为NCCL_GRAPH，可能是为了关闭某些与图相关的警告 
+  getPciPath(busId, &path); // 根据busId获取PCI设备的路径，并存储在path中
+  ncclDebugNoWarn = 0; // 恢复ncclDebugNoWarn为0，关闭之前的特殊调试设置 
 
-  if (path) {
-    NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"));
+  if (path) { // 如果path不为空（即成功获取了PCI设备的路径）
+    NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class")); // 从系统中获取与path对应的"class"属性，并设置到pciNode节点中
   }
+
+  // 获取link_width，link_speed等属性
   int index;
   ncclDebugNoWarn = NCCL_GRAPH;
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "vendor", &index));
+  NCCLCHECK(xmlGetAttrIndex(pciNode, "vendor", &index)); // 尝试从pciNode节点中获取vendor属性的索引
   if (index == -1) {
-    if (path) ncclTopoSetAttrFromSys(pciNode, path, "vendor", "vendor");
+    if (path) ncclTopoSetAttrFromSys(pciNode, path, "vendor", "vendor"); // 如果path不为空，则从系统中获取与path对应的"vendor"属性，并设置到pciNode节点中
   }
+  // 下面类似地处理device, subsystem_vendor, subsystem_device属性
   NCCLCHECK(xmlGetAttrIndex(pciNode, "device", &index));
   if (index == -1) {
     if (path) ncclTopoSetAttrFromSys(pciNode, path, "device", "device");
@@ -585,19 +592,21 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     if (path) ncclTopoSetAttrFromSys(pciNode, path, "subsystem_device", "subsystem_device");
   }
   ncclDebugNoWarn = 0;
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "link_speed", &index));
-  if (index == -1) {
-    if (path) {
+  NCCLCHECK(xmlGetAttrIndex(pciNode, "link_speed", &index)); // 尝试从pciNode节点中获取link_speed属性的索引
+  if (index == -1) { // 如果索引为-1（即属性不存在）
+    if (path) { // 如果path不为空
       char deviceSpeedStr[MAX_STR_LEN];
+      // 初始化设备速度和端口速度为FLT_MAX（一个表示无穷大的浮点数）
       float deviceSpeed = FLT_MAX;
-      NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_speed", deviceSpeedStr));
-      sscanf(deviceSpeedStr, "%f GT/s", &deviceSpeed);
+      NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_speed", deviceSpeedStr)); // 从系统中获取与path对应的"max_link_speed"属性，并存储在deviceSpeedStr中 
+      sscanf(deviceSpeedStr, "%f GT/s", &deviceSpeed); // 将字符串转换为浮点数
       char portSpeedStr[MAX_STR_LEN];
       float portSpeed = FLT_MAX;
+      // 类似地，从系统的父路径（可能是端口）中获取"max_link_speed"属性
       NCCLCHECK(ncclTopoGetStrFromSys(path, "../max_link_speed", portSpeedStr));
       sscanf(portSpeedStr, "%f GT/s", &portSpeed);
-      NCCLCHECK(xmlSetAttr(pciNode, "link_speed", portSpeed < deviceSpeed ? portSpeedStr : deviceSpeedStr));
-    } else {
+      NCCLCHECK(xmlSetAttr(pciNode, "link_speed", portSpeed < deviceSpeed ? portSpeedStr : deviceSpeedStr)); // 设置link_speed属性为设备速度和端口速度中较小的一个
+    } else { // 如果path为空，则设置link_speed属性为空字符串
       NCCLCHECK(xmlSetAttr(pciNode, "link_speed", ""));
     }
   }
@@ -632,83 +641,94 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     }
   }
 
-  struct ncclXmlNode* parent = pciNode->parent;
-  if (parent == NULL) {
-    if (path) {
+  // 根据路径查找父节点，查找不到就创建父节点，继续查找父节点的父节点（爷爷节点），就这样循环查找和创建，构建xml树，直到找到父节点
+  struct ncclXmlNode* parent = pciNode->parent; // 获取当前pciNode的父节点
+  if (parent == NULL) { // 如果当前pciNode没有父节点
+    if (path) { // 如果path（PCI设备的路径）不为空
       // Save that for later in case next step is a CPU
-      char numaIdStr[MAX_STR_LEN];
-      NCCLCHECK(ncclTopoGetStrFromSys(path, "numa_node", numaIdStr));
+      char numaIdStr[MAX_STR_LEN]; // 用于存储NUMA节点ID的字符串
+      NCCLCHECK(ncclTopoGetStrFromSys(path, "numa_node", numaIdStr)); // 从系统中根据PCI路径获取NUMA节点ID
 
       // Go up one level in the PCI tree. Rewind two "/" and follow the upper PCI
       // switch, or stop if we reach a CPU root complex.
-      int slashCount = 0;
-      int parentOffset;
-      for (parentOffset = strlen(path)-1; parentOffset>0; parentOffset--) {
-        if (path[parentOffset] == '/') {
-          slashCount++;
-          path[parentOffset] = '\0';
-          int start = parentOffset - 1;
-          while (start>0 && path[start] != '/') start--;
+      int slashCount = 0; // 用于计数'/'的数量
+      int parentOffset; // 用于遍历path的偏移量
+      for (parentOffset = strlen(path)-1; parentOffset>0; parentOffset--) { // 从path的末尾开始遍历
+        if (path[parentOffset] == '/') { // 如果遇到'/'
+          slashCount++; // '/'计数加1
+          path[parentOffset] = '\0'; // 临时将'/'替换为'\0'，以便获取上级路径
+          int start = parentOffset - 1; // 从'/'前一个字符开始寻找下一个'/' 
+          while (start>0 && path[start] != '/') start--; // 找到上一个'/'
           // Check whether the parent path looks like "BBBB:BB:DD.F" or not.
-          if (checkBDFFormat(path+start+1) == 0) {
+          if (checkBDFFormat(path+start+1) == 0) { // 检查上级路径是否符合PCI设备的BDF格式（总线:设备:功能）
             // This a CPU root complex. Create a CPU tag and stop there.
-            struct ncclXmlNode* topNode;
-            NCCLCHECK(xmlFindTag(xml, "system", &topNode));
-            NCCLCHECK(xmlGetSubKv(topNode, "cpu", &parent, "numaid", numaIdStr));
-            if (parent == NULL) {
-              NCCLCHECK(xmlAddNode(xml, topNode, "cpu", &parent));
-              NCCLCHECK(xmlSetAttrLong(parent, "host_hash", getHostHash()));
-              NCCLCHECK(xmlSetAttr(parent, "numaid", numaIdStr));
+            struct ncclXmlNode* topNode;  // 定义一个指向系统顶层的指针 
+            NCCLCHECK(xmlFindTag(xml, "system", &topNode)); // 查找系统标签
+            NCCLCHECK(xmlGetSubKv(topNode, "cpu", &parent, "numaid", numaIdStr)); // 在系统标签下查找numaid为numaIdStr的cpu标签
+            if (parent == NULL) { // 如果没有找到 
+              NCCLCHECK(xmlAddNode(xml, topNode, "cpu", &parent)); // 在系统标签下添加一个新的cpu标签 
+              NCCLCHECK(xmlSetAttrLong(parent, "host_hash", getHostHash())); // 设置host_hash属性
+              NCCLCHECK(xmlSetAttr(parent, "numaid", numaIdStr)); // 设置numaid属性
             }
           } else if (slashCount == 2) {
             // Continue on the upper PCI switch
-            for (int i = strlen(path)-1; i>0; i--) {
-              if (path[i] == '/') {
-                NCCLCHECK(xmlFindTagKv(xml, "pci", &parent, "busid", path+i+1));
-                if (parent == NULL) {
-                  NCCLCHECK(xmlAddNode(xml, NULL, "pci", &parent));
-                  NCCLCHECK(xmlSetAttr(parent, "busid", path+i+1));
+            for (int i = strlen(path)-1; i>0; i--) { // 从path的末尾开始遍历
+              if (path[i] == '/') { // 如果遇到'/' 
+                NCCLCHECK(xmlFindTagKv(xml, "pci", &parent, "busid", path+i+1)); // 查找busid为path+i+1的pci标签
+                if (parent == NULL) { // 如果没有找到
+                  NCCLCHECK(xmlAddNode(xml, NULL, "pci", &parent)); // 在XML树的根下添加一个新的pci标签
+                  NCCLCHECK(xmlSetAttr(parent, "busid", path+i+1)); // 设置busid属性
                 }
-                break;
+                break; // 找到后跳出循环
               }
             }
           }
         }
-        if (parent) break;
+        if (parent) break; // 如果找到了父节点，则跳出循环
       }
     } else {
+      // 如果没有在 /sys 目录下找到相关信息，那么将 GPU 附加到一个未知的 CPU 上 
       // No information on /sys, attach GPU to unknown CPU
-      NCCLCHECK(xmlFindTagKv(xml, "cpu", &parent, "numaid", "-1"));
-      if (parent == NULL) {
-        struct ncclXmlNode* topNode;
-        NCCLCHECK(xmlFindTag(xml, "system", &topNode));
-        NCCLCHECK(xmlAddNode(xml, topNode, "cpu", &parent));
-        NCCLCHECK(xmlSetAttrLong(parent, "host_hash", getHostHash()));
-        NCCLCHECK(xmlSetAttr(parent, "numaid", "-1"));
-        NCCLCHECK(ncclTopoGetXmlFromCpu(parent, xml));
+      NCCLCHECK(xmlFindTagKv(xml, "cpu", &parent, "numaid", "-1")); // 尝试在 XML 中查找名为 "cpu" 的标签，并查找具有 "numaid" 属性的标签，如果找不到，则 "numaid" 设置为 "-1" 
+      if (parent == NULL) { // 如果 parent 指针为空，说明没有找到符合条件的 "cpu" 标签
+        struct ncclXmlNode* topNode; // 定义一个指向 XML 节点的指针 topNod
+        NCCLCHECK(xmlFindTag(xml, "system", &topNode)); // 在 XML 中查找名为 "system" 的标签，并将找到的节点赋值给 topNode
+        NCCLCHECK(xmlAddNode(xml, topNode, "cpu", &parent)); // 在 topNode 下添加一个名为 "cpu" 的子节点，并将新节点的指针赋值给 parent 
+        NCCLCHECK(xmlSetAttrLong(parent, "host_hash", getHostHash())); // 设置新节点的 "host_hash" 属性为当前主机的哈希值
+        NCCLCHECK(xmlSetAttr(parent, "numaid", "-1")); // 设置新节点的 "numaid" 属性为 "-1"，表示这是一个未知的 CPU
+        NCCLCHECK(ncclTopoGetXmlFromCpu(parent, xml)); // 调用函数从 CPU 获取 XML 数据并填充到 parent 节点中 
       }
     }
-    pciNode->parent = parent;
+
+    // 插入节点GPU节点
+    pciNode->parent = parent; // 将 pciNode 的 parent 指针设置为前面找到的或创建的 parent 节点
     // Keep PCI sub devices ordered by PCI Bus ID (Issue #820)
     int subIndex = parent->nSubs;
     const char* newBusId;
     NCCLCHECK(xmlGetAttrStr(pciNode, "busid", &newBusId));
     for (int s=0; s<parent->nSubs; s++) {
       const char* busId;
-      NCCLCHECK(xmlGetAttr(parent->subs[s], "busid", &busId));
+      NCCLCHECK(xmlGetAttr(parent->subs[s], "busid", &busId)); // 获取当前子节点的 busid 
+
+      // 如果当前子节点的 busid 不为空，并且新设备的 busid 比当前子节点的 busid 小  
+      // 则将 subIndex 设置为当前索引 s，并跳出循环
       if (busId != NULL && strcmp(newBusId, busId) < 0) { subIndex = s; break; }
     }
+    // 如果 parent 的子节点数量已经达到了最大值 MAX_SUBS
     if (parent->nSubs == MAX_SUBS) {
+      // 发出警告，并返回 ncclInternalError 错误 
       WARN("Error : XML parser is limited to %d subnodes", MAX_SUBS);
       return ncclInternalError;
     }
+
+    // 将 parent 的子节点从 subIndex 开始向后移动一个位置，为新节点腾出空间
     for (int s = parent->nSubs; s > subIndex; s--) parent->subs[s] = parent->subs[s-1];
-    parent->subs[subIndex] = pciNode;
-    parent->nSubs++;
+    parent->subs[subIndex] = pciNode; // 将 pciNode 插入到正确的位置 subIndex 
+    parent->nSubs++; // 增加 parent 的子节点数量 
   }
-  if (strcmp(parent->name, "pci") == 0) {
+  if (strcmp(parent->name, "pci") == 0) { // 如果 parent 节点的名称是 "pci"，则从系统获取 XML 数据并填充到 parent 节点中
     NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
-  } else if (strcmp(parent->name, "cpu") == 0) {
+  } else if (strcmp(parent->name, "cpu") == 0) { // 如果 parent 节点的名称是 "cpu"，则从 CPU 获取 XML 数据并填充到 parent 节点中
     NCCLCHECK(ncclTopoGetXmlFromCpu(parent, xml));
   }
   free(path);
@@ -865,14 +885,19 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   return ncclSuccess;
 }
 
+// ncclTopoFillGpu，它接受一个ncclXml指针、一个char指针（busId）和一个ncclXmlNode指针的指针（gpuNode）作为参数  
 ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, struct ncclXmlNode** gpuNode) {
-  struct ncclXmlNode* node;
-  NCCLCHECK(ncclTopoGetPciNode(xml, busId, &node));
-  NCCLCHECK(xmlSetAttrIfUnset(node, "class", "0x03"));
-  NCCLCHECK(ncclTopoGetXmlFromSys(node, xml));
-  nvmlDevice_t nvmlDev;
-  NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
-  NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode));
+  struct ncclXmlNode* node; // 定义一个ncclXmlNode指针node，用于临时存储找到的PCI节点的指针 
+
+  // ncclTopoGetPciNode()确定当前GPU卡是否已创建xml node，没有就创建
+  NCCLCHECK(ncclTopoGetPciNode(xml, busId, &node)); // 根据busId在xml结构中查找匹配的PCI节点，并将找到的节点指针存储在node中
+  NCCLCHECK(xmlSetAttrIfUnset(node, "class", "0x03")); // 确保node节点有"class"属性，并且其值为"0x03" 
+  // 获取GPU到cpu的路径，路径信息获取，生成xml树
+  NCCLCHECK(ncclTopoGetXmlFromSys(node, xml)); // 从系统中获取与node节点相关的更多XML信息，并添加到xml结构中
+  nvmlDevice_t nvmlDev; // 定义一个nvmlDevice_t类型的变量nvmlDev，用于存储从busId获取的NVML设备句柄
+  NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev)); // 根据busId获取对应的NVML设备句柄，并存储在nvmlDev中
+  // GPU相关信息获取，设置NVlink
+  NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode)); // 从nvmlDev设备句柄中获取与GPU相关的XML信息，并添加到xml结构中, 同时将找到的GPU节点的指针存储在gpuNode中
   return ncclSuccess;
 }
 
