@@ -75,7 +75,7 @@ static ncclResult_t findRevLink(struct ncclTopoNode* node1, struct ncclTopoNode*
 
 // This is unfortunately needed since manipulating floats often results in rounding errors.
 #define SUB_ROUND(a, b) (a = roundf((a-b)*1000)/1000)
-
+// followPath判断一条路径带宽是否满足要求的函数
 static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNode* start, int maxSteps, float bw, int* steps) {
   float pciBw = bw;
   for (int step=0; step<path->count; step++) {
@@ -113,6 +113,9 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   return ncclSuccess;
 }
 
+// ncclTopoFollowPath是搜索过程中的剪枝函数，
+// 其寻找type1/index1节点至type2/index2节点的路径类型和带宽是否满足ncclTopoGraph中typeintra，bwIntra，bwInter以及typeinter的要求。
+// 首先排除路径类型不匹配的情况（比如graph要求NVL而路径却是PCI），如路径类型判断通过，还需调用followPath判断路径带宽是否满足要求。
 // Try to go from node type1/index1 to no type2/index2. mult indicates whether we are counting the bandwidth (1) or undoing (-1).
 static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int type1, int index1, int type2, int index2, float mult, struct ncclTopoNode** node) {
   // First handle easy cases
